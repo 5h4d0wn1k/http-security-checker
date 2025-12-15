@@ -20,10 +20,29 @@ SEC_HEADERS = [
     "x-content-type-options",
     "referrer-policy",
     "permissions-policy",
+    "x-xss-protection",
+    "expect-ct",
+    "public-key-pins",
 ]
 
 
 def fetch(url: str, timeout: float) -> Tuple[int, Dict[str, str]]:
+    """
+    Fetch HTTP response headers from a URL.
+    
+    Makes a GET request and returns status code and headers.
+    Headers are normalized to lowercase keys.
+    
+    Args:
+        url: Target URL to fetch.
+        timeout: Request timeout in seconds.
+        
+    Returns:
+        Tuple of (status_code, headers_dict).
+        
+    Raises:
+        urllib.error.URLError: If request fails.
+    """
     ctx = ssl.create_default_context()
     req = urllib.request.Request(url, method="GET")
     with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:  # noqa: S310
@@ -33,17 +52,48 @@ def fetch(url: str, timeout: float) -> Tuple[int, Dict[str, str]]:
 
 
 def analyze(headers: Dict[str, str]) -> Dict[str, str]:
+    """
+    Analyze HTTP security headers.
+    
+    Checks for presence and validity of common security headers.
+    Validates header values where applicable.
+    
+    Args:
+        headers: Dictionary of HTTP headers (lowercase keys).
+        
+    Returns:
+        Dictionary mapping header names to status ("present", "missing", or "missing/invalid").
+    """
     report: Dict[str, str] = {}
+    
+    # Check all security headers
     for h in SEC_HEADERS:
         if h in headers:
             report[h] = "present"
         else:
             report[h] = "missing"
-    # Basic checks
-    if headers.get("x-content-type-options", "").lower() != "nosniff":
-        report["x-content-type-options"] = report.get("x-content-type-options", "missing/invalid")
-    if headers.get("x-frame-options", "").lower() not in {"deny", "sameorigin"}:
-        report["x-frame-options"] = report.get("x-frame-options", "missing/invalid")
+    
+    # Validate specific headers
+    x_content_type = headers.get("x-content-type-options", "").lower()
+    if x_content_type and x_content_type != "nosniff":
+        report["x-content-type-options"] = "invalid"
+    elif not x_content_type:
+        report["x-content-type-options"] = "missing"
+    
+    x_frame = headers.get("x-frame-options", "").lower()
+    if x_frame and x_frame not in {"deny", "sameorigin"}:
+        report["x-frame-options"] = "invalid"
+    elif not x_frame:
+        report["x-frame-options"] = "missing"
+    
+    # Check HSTS max-age
+    hsts = headers.get("strict-transport-security", "")
+    if hsts:
+        if "max-age" not in hsts.lower():
+            report["strict-transport-security"] = "present (no max-age)"
+        elif "max-age=0" in hsts.lower():
+            report["strict-transport-security"] = "present (disabled)"
+    
     return report
 
 
